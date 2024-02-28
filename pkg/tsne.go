@@ -459,6 +459,7 @@ func SquaredDistanceMatrixWithCtx(ctx context.Context, X mat.Matrix) mat.Matrix 
 	// Compute the x'x and the y'y terms
 	xx := mat.NewDense(n, n, nil)
 	yy := mat.NewDense(n, n, nil)
+	fmt.Println("tsne.SquaredDistanceMatrixWithCtx() starting loop")
 	for r := 0; r < n; r++ {
 		select {
 		case <-ctx.Done():
@@ -471,6 +472,7 @@ func SquaredDistanceMatrixWithCtx(ctx context.Context, X mat.Matrix) mat.Matrix 
 			}
 		}
 	}
+	fmt.Println("tsne.SquaredDistanceMatrixWithCtx() ending loop")
 	// Compute the final sum: x'x + y'y – 2 x'y
 	D.Add(xx, yy)
 	D.Add(D, xy)
