@@ -235,7 +235,7 @@ func (tsne *TSNE) d2pWithCtx(ctx context.Context, D mat.Matrix, tol, perplexity 
 		if ctx.Err() != nil {
 			// we reset; abandon the work
 			fmt.Printf("d2pWithCtx detected cancelation")
-			i = tsne.n
+			break
 		}
 		// Print progress
 		if tsne.verbose && i%500 == 0 {
