@@ -75,7 +75,9 @@ func (tsne *TSNE) EmbedData(X mat.Matrix, stepFunc func(iter int, divergence flo
 }
 
 func (tsne *TSNE) EmbedDataWithCtx(ctx context.Context, X mat.Matrix, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) mat.Matrix {
+	// this bit is quick and no need to cancel
 	D := SquaredDistanceMatrix(X)
+	// d2pWithCtx inside the next is the slow part
 	return tsne.EmbedDistancesWithCtx(ctx, D, stepFunc)
 }
 
@@ -106,6 +108,7 @@ func (tsne *TSNE) EmbedDistancesWithCtx(ctx context.Context, D mat.Matrix, stepF
 	}
 
 	tsne.n = n
+	// next is slow and needs the cancel check
 	tsne.d2pWithCtx(ctx, D, EntropyTolerance, tsne.perplexity)
 	tsne.initSolution()
 	tsne.run(stepFunc)
@@ -234,7 +237,7 @@ func (tsne *TSNE) d2pWithCtx(ctx context.Context, D mat.Matrix, tol, perplexity 
 	for i := 0; i < tsne.n; i++ {
 		if ctx.Err() != nil {
 			// we reset; abandon the work
-			fmt.Printf("d2pWithCtx detected cancelation")
+			// fmt.Printf("d2pWithCtx detected cancelation")
 			break
 		}
 		// Print progress
@@ -544,38 +547,6 @@ func SquaredDistanceMatrix(X mat.Matrix) mat.Matrix {
 			yy.Set(r, c, diagVec.AtVec(c))
 		}
 	}
-	// Compute the final sum: x'x + y'y – 2 x'y
-	D.Add(xx, yy)
-	D.Add(D, xy)
-	return D
-}
-
-func SquaredDistanceMatrixWithCtx(ctx context.Context, X mat.Matrix) mat.Matrix {
-	n, _ := X.Dims()
-	// Allocate the distance matrix
-	D := mat.NewDense(n, n, nil)
-	// Multiply X transpose by X (to obtain the x'y term)
-	xy := mat.NewDense(n, n, nil)
-	xy.Mul(X, X.T())
-	diagVec := Diagonal(xy) // Obtain the diagonal before scaling
-	xy.Scale(-2, xy)
-	// Compute the x'x and the y'y terms
-	xx := mat.NewDense(n, n, nil)
-	yy := mat.NewDense(n, n, nil)
-	fmt.Println("tsne.SquaredDistanceMatrixWithCtx() starting loop")
-	for r := 0; r < n; r++ {
-		select {
-		case <-ctx.Done():
-			fmt.Println("tsne.SquaredDistanceMatrixWithCtx() canceled")
-			return mat.NewDense(n, n, nil)
-		default:
-			for c := 0; c < n; c++ {
-				xx.Set(r, c, diagVec.AtVec(r))
-				yy.Set(r, c, diagVec.AtVec(c))
-			}
-		}
-	}
-	fmt.Println("tsne.SquaredDistanceMatrixWithCtx() ending loop")
 	// Compute the final sum: x'x + y'y – 2 x'y
 	D.Add(xx, yy)
 	D.Add(D, xy)
