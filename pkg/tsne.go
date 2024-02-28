@@ -111,7 +111,7 @@ func (tsne *TSNE) EmbedDistancesWithCtx(ctx context.Context, D mat.Matrix, stepF
 	// next is slow and needs the cancel check
 	tsne.d2pWithCtx(ctx, D, EntropyTolerance, tsne.perplexity)
 	tsne.initSolution()
-	tsne.run(stepFunc)
+	tsne.runWithCtx(ctx, stepFunc)
 	return tsne.Y
 }
 
@@ -238,7 +238,7 @@ func (tsne *TSNE) d2pWithCtx(ctx context.Context, D mat.Matrix, tol, perplexity 
 		if ctx.Err() != nil {
 			// we reset; abandon the work
 			// fmt.Printf("d2pWithCtx detected cancelation")
-			break
+			return
 		}
 		// Print progress
 		if tsne.verbose && i%500 == 0 {
@@ -315,8 +315,42 @@ func (tsne *TSNE) d2pWithCtx(ctx context.Context, D mat.Matrix, tol, perplexity 
 // run performs batch gradient descent to reduce the Kullback-Leibler divergence between P and Q,
 // the high dimensional affinities and the low dimensional affinities respectively.
 func (tsne *TSNE) run(stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) {
+	for iter := 0; iter < tsne.maxIter; iter++ {
+		// Compute KL divergence and update the gradient matrix
+		divergence := tsne.costGradient(tsne.P, tsne.Y)
+		// Step in the direction of negative gradient (times the learning rate)
+		scaledGrad := mat.NewDense(tsne.n, tsne.dimsOut, nil)
+		scaledGrad.CloneFrom(tsne.dCdY)
+		scaledGrad.Scale(tsne.learningRate, scaledGrad)
+		tsne.Y.Sub(tsne.Y, scaledGrad)
+		// Reproject Y to have zero mean
+		ymean := make([]float64, tsne.dimsOut)
+		for i := 0; i < tsne.n; i++ {
+			for d := 0; d < tsne.dimsOut; d++ {
+				ymean[d] += tsne.Y.At(i, d)
+			}
+		}
+		tsne.Y.Apply(func(i, j int, v float64) float64 {
+			return v - ymean[j]/float64(tsne.n)
+		}, tsne.Y)
+		// If provided, call user step function
+		if stepFunc != nil {
+			stop := stepFunc(iter, divergence, tsne.Y)
+			if stop {
+				break
+			}
+		}
+	}
+}
+
+func (tsne *TSNE) runWithCtx(ctx context.Context, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) {
 
 	for iter := 0; iter < tsne.maxIter; iter++ {
+		if ctx.Err() != nil {
+			// we reset; abandon the work
+			// fmt.Printf("d2pWithCtx detected cancelation")
+			return
+		}
 		// Compute KL divergence and update the gradient matrix
 		divergence := tsne.costGradient(tsne.P, tsne.Y)
 		// Step in the direction of negative gradient (times the learning rate)
