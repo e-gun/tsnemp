@@ -6,6 +6,7 @@
 package tsnemp
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -69,8 +70,12 @@ func NewMPTSNE(wc int, dimensionsOut int, perplexity, learningRate float64, maxI
 // probabilities calculated based on the provided data matrix and runs t-SNE.
 // It returns the generated embedding.
 func (tsne *TSNE) EmbedData(X mat.Matrix, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) mat.Matrix {
-
 	D := SquaredDistanceMatrix(X)
+	return tsne.EmbedDistances(D, stepFunc)
+}
+
+func (tsne *TSNE) EmbedDataWithCtx(ctx context.Context, X mat.Matrix, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) mat.Matrix {
+	D := SquaredDistanceMatrixWithCtx(ctx, X)
 	return tsne.EmbedDistances(D, stepFunc)
 }
 
@@ -431,6 +436,33 @@ func SquaredDistanceMatrix(X mat.Matrix) mat.Matrix {
 	xx := mat.NewDense(n, n, nil)
 	yy := mat.NewDense(n, n, nil)
 	for r := 0; r < n; r++ {
+		for c := 0; c < n; c++ {
+			xx.Set(r, c, diagVec.AtVec(r))
+			yy.Set(r, c, diagVec.AtVec(c))
+		}
+	}
+	// Compute the final sum: x'x + y'y – 2 x'y
+	D.Add(xx, yy)
+	D.Add(D, xy)
+	return D
+}
+
+func SquaredDistanceMatrixWithCtx(ctx context.Context, X mat.Matrix) mat.Matrix {
+	n, _ := X.Dims()
+	// Allocate the distance matrix
+	D := mat.NewDense(n, n, nil)
+	// Multiply X transpose by X (to obtain the x'y term)
+	xy := mat.NewDense(n, n, nil)
+	xy.Mul(X, X.T())
+	diagVec := Diagonal(xy) // Obtain the diagonal before scaling
+	xy.Scale(-2, xy)
+	// Compute the x'x and the y'y terms
+	xx := mat.NewDense(n, n, nil)
+	yy := mat.NewDense(n, n, nil)
+	for r := 0; r < n; r++ {
+		if ctx.Err() != nil {
+			return mat.NewDense(n, n, nil)
+		}
 		for c := 0; c < n; c++ {
 			xx.Set(r, c, diagVec.AtVec(r))
 			yy.Set(r, c, diagVec.AtVec(c))
