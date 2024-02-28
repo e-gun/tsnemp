@@ -75,8 +75,8 @@ func (tsne *TSNE) EmbedData(X mat.Matrix, stepFunc func(iter int, divergence flo
 }
 
 func (tsne *TSNE) EmbedDataWithCtx(ctx context.Context, X mat.Matrix, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) mat.Matrix {
-	D := SquaredDistanceMatrixWithCtx(ctx, X)
-	return tsne.EmbedDistances(D, stepFunc)
+	D := SquaredDistanceMatrix(X)
+	return tsne.EmbedDistancesWithCtx(ctx, D, stepFunc)
 }
 
 // InitDistances initializes the pairwise affinity matrix P with the similarity
@@ -92,6 +92,21 @@ func (tsne *TSNE) EmbedDistances(D mat.Matrix, stepFunc func(iter int, divergenc
 
 	tsne.n = n
 	tsne.d2p(D, EntropyTolerance, tsne.perplexity)
+	tsne.initSolution()
+	tsne.run(stepFunc)
+	return tsne.Y
+}
+
+func (tsne *TSNE) EmbedDistancesWithCtx(ctx context.Context, D mat.Matrix, stepFunc func(iter int, divergence float64, embedding mat.Matrix) bool) mat.Matrix {
+
+	// Verify that D is square
+	n, d := D.Dims()
+	if n != d {
+		panic("squared distance matrix is not square")
+	}
+
+	tsne.n = n
+	tsne.d2pWithCtx(ctx, D, EntropyTolerance, tsne.perplexity)
 	tsne.initSolution()
 	tsne.run(stepFunc)
 	return tsne.Y
@@ -134,6 +149,94 @@ func (tsne *TSNE) d2p(D mat.Matrix, tol, perplexity float64) {
 	dDense := mat.DenseCopyOf(D)
 	// Loop over all data points
 	for i := 0; i < tsne.n; i++ {
+		// Print progress
+		if tsne.verbose && i%500 == 0 {
+			fmt.Printf("Computing P-values for point %d of %d...\n", i, tsne.n)
+		}
+		// Perform a binary search for the Gaussian kernel precision (beta)
+		// such that the entropy (and thus the perplexity) of the distribution
+		// given the data is the same for all data points
+		betaMin := math.Inf(-1)
+		betaMax := math.Inf(1)
+		beta := float64(1) // initial value of precision
+		Di := dDense.RowView(i)
+		for tries := 0; tries < MaxBinarySearchSteps; tries++ {
+			// Compute raw probabilities with beta precision (along with sum of all raw probabilities)
+			pSum := float64(0)
+			for j := 0; j < Di.Len(); j++ {
+				var p float64
+				if i == j {
+					p = 0
+				} else {
+					p = math.Exp(-Di.AtVec(j) * beta)
+				}
+				tsne.P.Set(i, j, p)
+				pSum += p
+			}
+			// Normalize probabilities and compute entropy H
+			var H float64 // Distribution entropy
+			for j := 0; j < Di.Len(); j++ {
+				var p float64
+				if pSum == 0 {
+					p = 0
+				} else {
+					p = tsne.P.At(i, j) / pSum
+				}
+				tsne.P.Set(i, j, p)
+				if p > Epsilon {
+					H -= p * math.Log(p)
+				}
+			}
+			// Adjust beta to move H closer to Htarget
+			Hdiff := H - Htarget
+			if Hdiff > 0 {
+				// Entropy is too high (distribution too spread-out)
+				// So we need to increase the precision
+				betaMin = beta // Move up the bounds
+				if betaMax == math.Inf(1) {
+					beta = beta * 2
+				} else {
+					beta = (beta + betaMax) / 2
+				}
+			} else {
+				// Entropy is too low - need to decrease precision
+				betaMax = beta // Move down the bounds
+				if betaMin == math.Inf(-1) {
+					beta = beta / 2
+				} else {
+					beta = (beta + betaMin) / 2
+				}
+			}
+			// If current entropy is within specified tolerance - we are done with this data point
+			if math.Abs(Hdiff) < tol {
+				break
+			}
+		}
+	}
+	// Symmetrize and normalize P
+	tsne.P.Add(tsne.P, tsne.P.T())
+	tsne.P.Scale(1/float64(2*tsne.n), tsne.P)
+	tsne.P.Apply(func(i, j int, v float64) float64 {
+		return math.Max(v, GreaterThanZero)
+	}, tsne.P)
+}
+
+func (tsne *TSNE) d2pWithCtx(ctx context.Context, D mat.Matrix, tol, perplexity float64) {
+
+	// The target entropy of the gaussian kernels is the log of the target perplexity
+	Htarget := math.Log(perplexity)
+
+	// Allocate the probability matrix
+	tsne.P = mat.NewDense(tsne.n, tsne.n, nil)
+
+	dDense := mat.DenseCopyOf(D)
+	// Loop over all data points
+	for i := 0; i < tsne.n; i++ {
+		if ctx.Err() != nil {
+			// we reset; abandon the work
+			fmt.Printf("d2pWithCtx detected cancelation")
+			i = tsne.n
+		}
 		// Print progress
 		if tsne.verbose && i%500 == 0 {
 			fmt.Printf("Computing P-values for point %d of %d...\n", i, tsne.n)
