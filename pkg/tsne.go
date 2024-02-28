@@ -460,12 +460,15 @@ func SquaredDistanceMatrixWithCtx(ctx context.Context, X mat.Matrix) mat.Matrix 
 	xx := mat.NewDense(n, n, nil)
 	yy := mat.NewDense(n, n, nil)
 	for r := 0; r < n; r++ {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
+			fmt.Println("tsne.SquaredDistanceMatrixWithCtx() canceled")
 			return mat.NewDense(n, n, nil)
-		}
-		for c := 0; c < n; c++ {
-			xx.Set(r, c, diagVec.AtVec(r))
-			yy.Set(r, c, diagVec.AtVec(c))
+		default:
+			for c := 0; c < n; c++ {
+				xx.Set(r, c, diagVec.AtVec(r))
+				yy.Set(r, c, diagVec.AtVec(c))
+			}
 		}
 	}
 	// Compute the final sum: x'x + y'y – 2 x'y
